@@ -1,0 +1,31 @@
+name: Build Android APK
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3 python3-pip python3-venv             git zip unzip openjdk-17-jdk build-essential autoconf libtool             pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev cmake             libffi-dev libssl-dev
+
+      - name: Install buildozer
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install buildozer cython
+
+      - name: Build APK
+        run: buildozer android debug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: kunkun-apk
+          path: bin/*.apk
