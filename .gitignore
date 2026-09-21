@@ -1,0 +1,23 @@
+# ---- Buildozer / python-for-android 构建产物 ----
+bin/
+.buildozer/
+.buildozer_global/
+*.aab
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.deps/
+.pip-tmp/
+
+# ---- 编辑器 / 系统 ----
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# ---- 本地临时文件 ----
+_probe.txt
+_gitver.py

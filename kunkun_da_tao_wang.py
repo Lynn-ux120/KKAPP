@@ -481,7 +481,7 @@ class Chaser:
 # ==========================================================================
 class Obstacle:
     SPEC = {
-        "desk":   {"name": "课桌",   "color": (150, 96, 44),   "h": 130, "jumpable": False},
+        "desk":   {"name": "坤桌",   "color": (150, 96, 44),   "h": 130, "jumpable": False},
         "eraser": {"name": "黑板擦", "color": (84, 116, 220),  "h": 55,  "jumpable": True},
         "paper":  {"name": "试卷",   "color": (245, 245, 245), "h": 45,  "jumpable": True},
     }
@@ -568,7 +568,12 @@ class PowerUp:
 class Game:
     def __init__(self):
         pygame.init()
-        self.screen = pygame.display.set_mode((WIDTH, HEIGHT))
+        # 手机分辨率各不相同：用 SCALED 让 720x820 的逻辑画面自动等比铺满屏幕，
+        # 同时触摸坐标会由 pygame 自动换算回逻辑坐标，游戏逻辑无需改动。
+        try:
+            self.screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.SCALED)
+        except Exception:
+            self.screen = pygame.display.set_mode((WIDTH, HEIGHT))
         pygame.display.set_caption("坤坤大逃亡 - 校园大逃亡")
         self.clock = pygame.time.Clock()
         self.running = True

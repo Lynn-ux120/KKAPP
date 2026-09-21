@@ -34,6 +34,19 @@
 python kunkun_da_tao_wang.py
 ```
 
+也可以直接双击根目录的 `KK大逃亡（点我运行）.py`——它只是个启动器，
+真正的游戏代码在 `kunkun_da_tao_wang.py`（打包 APK 要求源码文件名是纯 ASCII）。
+
+```text
+kunkun_da_tao_wang.py            ← 游戏主程序（改代码改这里）
+KK大逃亡（点我运行）.py            ← 电脑端双击启动器
+main.py                          ← Android 打包入口
+buildozer.spec                   ← APK 打包配置
+icon.png                         ← 应用图标（用 tools/gen_icon.py 生成）
+tools/smoke_test.py              ← 无头冒烟测试
+tools/gen_icon.py                ← 重新生成图标
+```
+
 ## 操作方式
 
 | 按键 | 作用 |
@@ -49,3 +62,23 @@ python kunkun_da_tao_wang.py
 - 道具：咖啡（短暂双倍得分加速）、辣条（短暂无敌）。
 - 班主任的凝视：连续 5 秒不切换跑道，班主任与校长会加速逼近。
 - 难度随时间递增，速度越来越快。
+
+## 打包成安卓 APK
+
+见 [BUILD_ANDROID.md](BUILD_ANDROID.md)。
+
+简单说：Buildozer 只能在 Linux 上跑，本机 Windows 走不通，所以用
+**GitHub Actions 云构建** —— push 到 `main` 分支后，去仓库的 Actions 页
+下载编译好的 APK 即可。
+
+手机上：左右滑换道、上滑或点中间跳跃、点屏幕开始。
+
+## 本地自检
+
+改完代码先跑一遍冒烟测试，能提前发现资源缺失或渲染错误：
+
+```
+python tools/smoke_test.py
+```
+
+输出 `SMOKE OK` 即正常。
