@@ -31,10 +31,15 @@ import pygame
 # ==========================================================================
 # 一、全局常量
 # ==========================================================================
-WIDTH, HEIGHT = 720, 820          # 窗口总宽高
+WIDTH, HEIGHT = 720, 820          # 逻辑画布尺寸（真机启动时会按屏幕比例加高）
 PLAY_W = 520                      # 跑道区宽度
 SIDE_W = WIDTH - PLAY_W           # 侧边栏宽度
 FPS = 60
+
+# --- 屏幕自适应相关（见 Game.__init__ 中的适配逻辑）---
+HEIGHT_BASE = 820                 # 设计稿高度，作为缩放基准
+HEIGHT_MAX = 2000                 # 逻辑画布高度上限，避免超瘦长机型拉伸过度
+PLAYER_BOTTOM_GAP = 180           # 玩家判定线距画布底部的距离
 
 LANE_COUNT = 3                    # 跑道数量
 LANE_W = PLAY_W / LANE_COUNT      # 每条跑道宽度
@@ -49,6 +54,10 @@ JUMP_DURATION = 0.6               # 跳跃持续时间（秒）
 OBSTACLE_SPEED_BASE = 240.0       # 障碍初始下落速度（像素/秒）
 OBSTACLE_SPEED_INC = 13.0         # 每秒递增的速度
 OBSTACLE_SPEED_MAX = 950.0        # 速度上限
+
+# 设计稿基准值快照：屏幕自适应时按画布高度比例放大，保证难度手感不变
+_JUMP_REF = JUMP_HEIGHT
+_SPEED_REF = (OBSTACLE_SPEED_BASE, OBSTACLE_SPEED_INC, OBSTACLE_SPEED_MAX)
 SPAWN_INTERVAL_BASE = 1.0         # 障碍初始生成间隔（秒）
 SPAWN_INTERVAL_MIN = 0.42         # 障碍生成间隔下限
 
@@ -562,18 +571,100 @@ class PowerUp:
         draw_text(screen, self.name, 19, self.text_color, rect.center, anchor="center", bold=True)
 
 
+def _is_android():
+    """是否运行在 Android（python-for-android 打包环境）上。"""
+    return hasattr(sys, "getandroidapilevel") or "ANDROID_ARGUMENT" in os.environ
+
+
+def _screen_fit_enabled():
+    """是否启用手机屏幕自适应。
+
+    真机上启用；桌面端保持设计稿尺寸（桌面窗口若被拉高，在低分屏上会溢出）。
+    想在电脑上预览手机效果，可设环境变量 KK_FORCE_FIT=1。
+    """
+    if os.environ.get("KK_FORCE_FIT"):
+        return True
+    return _is_android()
+
+
+def _query_screen_size():
+    """读取设备真实屏幕像素尺寸。
+
+    Android 上 pygame.SCALED 需要知道屏幕比例才能算出正确的逻辑画布高度。
+    取不到就回退到设计稿尺寸（此时游戏表现与电脑端一致）。
+    """
+    if not pygame.display.get_init():
+        try:
+            pygame.display.init()
+        except Exception:
+            pass
+    try:
+        info = pygame.display.Info()
+        if info.current_w > 0 and info.current_h > 0:
+            return info.current_w, info.current_h
+    except Exception:
+        pass
+    try:
+        w, h = pygame.display.get_desktop_size()
+        if w > 0 and h > 0:
+            return w, h
+    except Exception:
+        pass
+    # 最后兜底：真的开一个全屏窗口去量它的尺寸
+    try:
+        probe = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
+        w, h = probe.get_size()
+        if w > 0 and h > 0:
+            return w, h
+    except Exception:
+        pass
+    return WIDTH, HEIGHT_BASE
+
+
 # ==========================================================================
 # 九、游戏主控制器
 # ==========================================================================
 class Game:
     def __init__(self):
         pygame.init()
-        # 手机分辨率各不相同：用 SCALED 让 720x820 的逻辑画面自动等比铺满屏幕，
-        # 同时触摸坐标会由 pygame 自动换算回逻辑坐标，游戏逻辑无需改动。
+
+        # --- 手机屏幕自适应 -------------------------------------------------
+        # 设计稿 720x820 的宽高比是 0.88，而手机竖屏普遍在 0.43~0.56 之间，
+        # 远瘦于设计稿。若直接用设计稿尺寸等比缩放，画面只会占屏幕中间一条，
+        # 上下留出大片黑边（看起来就是"界面太小"）。
+        # 这里按屏幕真实比例加高逻辑画布，让画面铺满全屏、不留黑边。
+        global HEIGHT, PLAYER_Y, JUMP_HEIGHT
+        global OBSTACLE_SPEED_BASE, OBSTACLE_SPEED_INC, OBSTACLE_SPEED_MAX
+        screen_w, screen_h = WIDTH, HEIGHT_BASE        # 默认用设计稿比例
+        if _screen_fit_enabled():
+            screen_w, screen_h = _query_screen_size()
+            # 部分安卓设备会把屏幕报告成横屏(如 2400x1080)，而本游戏锁定了竖屏，
+            # 这里统一按"短边为宽、长边为高"归一，避免因此算出错误比例。
+            if screen_w > screen_h:
+                screen_w, screen_h = screen_h, screen_w
+        HEIGHT = max(HEIGHT_BASE,
+                     min(HEIGHT_MAX, int(WIDTH * screen_h / screen_w)))
+        ratio = HEIGHT / HEIGHT_BASE
+
+        # 玩家判定线始终贴着画布底部，保证角色在屏幕下方而不是飘在中间
+        PLAYER_Y = HEIGHT - PLAYER_BOTTOM_GAP
+
+        # 画布变高 = 看得更远，若不提速，障碍从顶落到玩家线的时间会成倍变长，
+        # 游戏会变得又慢又无聊。按同比放大速度与跳跃高度，维持原有难度手感。
+        OBSTACLE_SPEED_BASE, OBSTACLE_SPEED_INC, OBSTACLE_SPEED_MAX = [
+            v * ratio for v in _SPEED_REF]
+        JUMP_HEIGHT = int(_JUMP_REF * ratio)
+
+        # SCALED 会把逻辑画布等比缩放并居中铺满屏幕，同时把触摸/鼠标坐标
+        # 自动换算回逻辑坐标，游戏逻辑无需改动。
         try:
-            self.screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.SCALED)
+            self.screen = pygame.display.set_mode((WIDTH, HEIGHT),
+                                                  pygame.SCALED | pygame.FULLSCREEN)
         except Exception:
-            self.screen = pygame.display.set_mode((WIDTH, HEIGHT))
+            try:
+                self.screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.SCALED)
+            except Exception:
+                self.screen = pygame.display.set_mode((WIDTH, HEIGHT))
         pygame.display.set_caption("坤坤大逃亡 - 校园大逃亡")
         self.clock = pygame.time.Clock()
         self.running = True
