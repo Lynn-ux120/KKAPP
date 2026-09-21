@@ -1,5 +1,0 @@
-﻿d=open("icon.png","rb").read()
-i=d.index(b"IHDR")
-w=int.from_bytes(d[i+4:i+8],"big"); h=int.from_bytes(d[i+8:i+12],"big")
-print("size",w,h,"bitdepth",d[i+12],"colortype",d[i+13],"(2=RGB,6=RGBA)")
-print("has_tRNS", b"tRNS" in d)
