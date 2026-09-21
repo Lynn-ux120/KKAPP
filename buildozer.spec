@@ -19,7 +19,7 @@ source.exclude_dirs = .git,.github,__pycache__,.venv,.deps,.pip-tmp,bin,.buildoz
 # (list) 依赖
 # 关键：p4a 的 pygame 配方版本是 2.1.0，只支持到 Python 3.10，
 # 而 p4a 默认已经是 Python 3.14，不锁版本必定编译失败。
-requirements = python3==3.10.13,pygame
+requirements = python3==3.10.13,hostpython3==3.10.13,pygame
 
 # (str) 使用 SDL2 引导器（pygame 必须）
 android.bootstrap = sdl2

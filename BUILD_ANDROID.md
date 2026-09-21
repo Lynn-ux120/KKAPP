@@ -70,9 +70,14 @@ adb install -r kunkundaotao-1.0-arm64-v8a_armeabi-v7a-debug.apk
 
 都写在 `buildozer.spec` 里，几个容易踩的坑：
 
-1. **Python 版本必须锁死 `python3==3.10.13`**
+1. **`python3` 和 `hostpython3` 必须锁成同一个版本 `3.10.13`**
    p4a 自带的 pygame 配方版本是 **2.1.0**，只支持到 Python 3.10；
-   而 p4a 现在的默认 Python 已经是 **3.14**。不锁版本必挂。
+   而 p4a 现在的默认 Python 已经是 **3.14.2**。不锁版本必挂。
+
+   而且两个都要锁——`hostpython3` 是构建期用的 Python，只锁 `python3` 会报：
+   ```
+   Build failed: python3 should have same version as hostpython3, 3.10.13 != 3.14.2
+   ```
 
 2. **Cython 必须锁在 3.0 以下**
    `Cython 3.x` 移除了 `longintrepr.h`，会直接把 pygame/kivy 配方编崩。
