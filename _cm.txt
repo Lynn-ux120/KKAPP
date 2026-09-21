@@ -1,0 +1,12 @@
+﻿[main 623af05] 鍧ゅ潳澶ч€冧骸锛氫慨姝ｅ畨鍗撴墦鍖呴厤缃紝鏀圭敤 GitHub Actions 浜戞瀯寤? 16 files changed, 462 insertions(+), 60 deletions(-)
+ create mode 100644 .gitignore
+ create mode 100644 .workbuddy/memory/2026-09-21.md
+ create mode 100644 "KK\345\244\247\351\200\203\344\272\241\357\274\210\347\202\271\346\210\221\350\277\220\350\241\214\357\274\211.py"
+ create mode 100644 _chk.py
+ create mode 100644 _lsr.txt
+ delete mode 100644 bgm.mp3
+ delete mode 100644 get.mp3
+ create mode 100644 icon.png
+ delete mode 100644 music.mp3
+ create mode 100644 tools/gen_icon.py
+ create mode 100644 tools/smoke_test.py

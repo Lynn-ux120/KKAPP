@@ -1,0 +1,16 @@
+﻿M  .github/workflows/build-apk.yml
+A  .gitignore
+A  .workbuddy/memory/2026-09-21.md
+M  BUILD_ANDROID.md
+A  "KK\345\244\247\351\200\203\344\272\241\357\274\210\347\202\271\346\210\221\350\277\220\350\241\214\357\274\211.py"
+M  README.md
+A  _chk.py
+A  _lsr.txt
+D  bgm.mp3
+M  buildozer.spec
+D  get.mp3
+A  icon.png
+M  kunkun_da_tao_wang.py
+D  music.mp3
+A  tools/gen_icon.py
+A  tools/smoke_test.py
