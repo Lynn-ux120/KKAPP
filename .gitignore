@@ -3,6 +3,9 @@ bin/
 .buildozer/
 .buildozer_global/
 *.aab
+*.apk
+*.zip
+apk/
 
 # ---- Python ----
 __pycache__/
