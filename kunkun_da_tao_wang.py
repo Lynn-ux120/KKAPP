@@ -24,34 +24,48 @@ import os
 import random
 import math
 import sys
+from collections import OrderedDict
 
 import pygame
+
+# 【关键】pygame.SCALED 默认按 letterbox 缩放：保持宽高比、多余部分填黑边。
+# 这正是"画面撑不满全屏"的元凶。改成 overscan 后 SDL 会把逻辑画面直接
+# 拉伸铺满屏幕；由于画布比例本身就等于屏幕比例，拉伸不会造成形变。
+# 该 hint 必须在创建窗口之前设置。
+os.environ.setdefault("SDL_RENDER_LOGICAL_SIZE_MODE", "overscan")
 
 
 # ==========================================================================
 # 一、全局常量
 # ==========================================================================
 # ---- 设计稿基准尺寸 ----
-# 所有绘制代码都按这套坐标编写。真机启动时 _apply_render_scale() 会把它们
-# 整体放大到屏幕原生分辨率，从而 1:1 渲染、不再有放大模糊。
-DESIGN_W = 720                    # 设计稿画布宽
-DESIGN_H = 820                    # 设计稿画布高
-DESIGN_PLAY_W = 520               # 设计稿跑道区宽
+# 所有绘制代码都按这套坐标编写。
+#
+# 【为什么画布宽度固定 720 而不是跟随屏幕物理宽度】
+# 上一版为了追求"原生分辨率"，把画布放大到屏幕物理像素（1080x2400 ≈ 260 万），
+# 而 pygame 是 CPU 软件渲染：每帧背景、路面标线、遮罩加起来要写近千万像素，
+# 手机上直接掉帧。现在画布固定 720 宽、按屏幕比例加高（约 115 万像素），
+# 绘制量降到原来的 1/3，清晰度交给 GPU 缩放（SCALED）来保证。
+DESIGN_W = 720                    # 画布宽度（固定，不随屏幕变化）
+DESIGN_H = 820                    # 画布基准高度
+CANVAS_H_MIN = 820                # 画布高度下限（防止宽屏设备把布局压扁）
+CANVAS_H_MAX = 1800               # 画布高度上限（控制软件渲染的像素总量）
 DESIGN_PLAYER_BOTTOM_GAP = 180    # 玩家判定线距画布底部的距离
 DESIGN_JUMP_HEIGHT = 150          # 跳跃最大上升高度
 DESIGN_SPEEDS = (240.0, 13.0, 950.0)   # 障碍初速 / 每秒递增 / 速度上限
 
 FPS = 60
-LANE_COUNT = 3                    # 跑道数量（与分辨率无关）
+LANE_COUNT = 3                    # 跑道数量
 
-# 画布像素上限：pygame 是软件渲染，像素越多越吃力。
-# 超过上限就整体降采样（略微牺牲清晰度）来保住帧率。
-MAX_CANVAS_PIXELS = 3_200_000
+# 跑道与障碍尺寸（侧边栏移除后跑道铺满全宽，障碍相应加宽以免显得空旷）
+OBSTACLE_W = 150                  # 障碍宽度
+POWERUP_SIZE = 76                 # 道具直径
+SIDE_PANEL_W = 0                  # 侧边栏宽度：已移除
 
-# ---- 运行时实际尺寸（由 _apply_render_scale() 计算）----
-_S = 1.0                          # 渲染缩放因子：设计稿像素 → 实际画布像素
+# ---- 运行时尺寸（由 _apply_render_scale() 计算）----
+_S = 1.0                          # 渲染缩放因子（画布=设计稿宽度，恒为 1）
 WIDTH, HEIGHT = DESIGN_W, DESIGN_H
-PLAY_W, SIDE_W = DESIGN_PLAY_W, DESIGN_W - DESIGN_PLAY_W
+PLAY_W, SIDE_W = WIDTH, SIDE_PANEL_W
 LANE_W = PLAY_W / LANE_COUNT      # 每条跑道宽度
 # 三条跑道中心的 x 坐标
 LANE_CENTERS = [PLAY_W * (2 * i + 1) / 6.0 for i in range(LANE_COUNT)]
@@ -69,34 +83,43 @@ SPAWN_INTERVAL_MIN = 0.42         # 障碍生成间隔下限
 # 分辨率换算
 # --------------------------------------------------------------------------
 def px(value):
-    """把设计稿像素换算到当前渲染分辨率。
+    """设计稿像素 → 画布像素。
 
-    所有硬编码的设计稿尺寸都必须经此换算，才能在高分屏上保持正确的物理大小。
+    画布宽度固定为设计稿宽度，所以这里是恒等映射。保留这个函数是因为
+    所有绘制代码都经由它取值，将来若要再调分辨率策略只需改这一处。
     """
-    return int(round(value * _S))
+    return int(round(value))
 
 
-def _apply_render_scale(scale, canvas_h):
-    """按渲染缩放因子重算所有尺寸相关的全局常量。
+def vh(fraction):
+    """按画布高度的比例取纵坐标。
 
-    scale    ：设计稿 → 画布的放大倍数（通常取 屏幕宽/720）
-    canvas_h ：画布高度（竖屏时等于屏幕高度，保证比例一致、不留黑边）
+    画布高度随设备屏幕比例在 820~1800 之间浮动，菜单布局若写死像素，
+    矮画布上会挤成一团、高画布上会散得太开。统一用比例定位即可自适应。
     """
-    global _S, WIDTH, HEIGHT, PLAY_W, SIDE_W, LANE_W, LANE_CENTERS
+    return int(round(HEIGHT * fraction))
+
+
+def _apply_render_scale(canvas_h):
+    """按屏幕比例确定画布高度，并重算与高度相关的全局常量。
+
+    canvas_h：画布高度。等于 720 × 屏幕高/屏幕宽，使画布宽高比与屏幕
+             完全一致——这样 SCALED 缩放后不留任何黑边。
+    """
+    global HEIGHT, PLAY_W, SIDE_W, LANE_W, LANE_CENTERS
     global PLAYER_Y, JUMP_HEIGHT
     global OBSTACLE_SPEED_BASE, OBSTACLE_SPEED_INC, OBSTACLE_SPEED_MAX
-    _S = scale
-    WIDTH = int(round(DESIGN_W * scale))
-    HEIGHT = int(canvas_h)
-    PLAY_W = int(round(DESIGN_PLAY_W * scale))
-    SIDE_W = WIDTH - PLAY_W
+
+    HEIGHT = max(CANVAS_H_MIN, min(CANVAS_H_MAX, int(canvas_h)))
+    PLAY_W = WIDTH                       # 跑道区 = 整个画布（侧边栏已移除）
+    SIDE_W = SIDE_PANEL_W
     LANE_W = PLAY_W / LANE_COUNT
     LANE_CENTERS = [PLAY_W * (2 * i + 1) / 6.0 for i in range(LANE_COUNT)]
 
     # 玩家判定线贴着画布底部，角色不会飘到屏幕中间
     PLAYER_Y = HEIGHT - px(DESIGN_PLAYER_BOTTOM_GAP)
-    # 跳跃高度与人物同步放大（只影响观感，不参与碰撞判定）
-    JUMP_HEIGHT = int(DESIGN_JUMP_HEIGHT * scale)
+    # 跳跃高度与障碍尺寸匹配，不随画布高度变化
+    JUMP_HEIGHT = DESIGN_JUMP_HEIGHT
     # 画布越高看得越远，速度同比放大才能维持原本的反应时间
     r = HEIGHT / DESIGN_H
     OBSTACLE_SPEED_BASE, OBSTACLE_SPEED_INC, OBSTACLE_SPEED_MAX = [
@@ -195,23 +218,28 @@ def make_circle_face(image, size):
     return img
 
 
-_text_cache = {}
-_TEXT_CACHE_MAX = 600
+_text_cache = OrderedDict()
+_TEXT_CACHE_MAX = 400
 
 
 def _render_text(text, size, color, bold):
     """渲染文本并缓存 Surface。
 
-    文字每帧都要重绘，而 font.render() 开销不低（尤其高分屏下字号变大后）。
-    这里按 (文本, 字号, 颜色, 粗体) 缓存，静态文案只需渲染一次。
+    文字每帧都要重绘，font.render() 开销不低，所以按
+    (文本, 字号, 颜色, 粗体) 缓存。
+
+    用 LRU 淘汰而非"满了就整体清空"：得分/时间这类每帧都在变的文本会不断
+    产生新条目，整体清空会让所有静态文案一起重新渲染，造成周期性的掉帧尖峰。
     """
     key = (text, size, color, bold)
     surf = _text_cache.get(key)
-    if surf is None:
-        if len(_text_cache) >= _TEXT_CACHE_MAX:
-            _text_cache.clear()
-        surf = get_font(size, bold).render(text, True, color)
-        _text_cache[key] = surf
+    if surf is not None:
+        _text_cache.move_to_end(key)
+        return surf
+    surf = get_font(size, bold).render(text, True, color)
+    _text_cache[key] = surf
+    if len(_text_cache) > _TEXT_CACHE_MAX:
+        _text_cache.popitem(last=False)      # 淘汰最久未使用的
     return surf
 
 
@@ -528,7 +556,9 @@ class Chaser:
         self.accent = accent
 
         self.phase = 0.0
-        self.base_feet_y = HEIGHT - px(24)      # 平时只露出上半身
+        # 脚底线贴近画布底部，只露出上半身；名字挂在脚下，
+        # 放到头顶会和玩家角色叠在一起（追击者就贴在玩家两侧）
+        self.base_feet_y = HEIGHT - px(44)
         self.feet_y = self.base_feet_y
         self.rise = 0.0                         # 凝视时逼近玩家的距离
         self.target_rise = 0.0
@@ -551,9 +581,9 @@ class Chaser:
         sx = self.x + (random.randint(-amp, amp) if amp else 0)
         draw_humanoid(screen, self.face, sx, self.feet_y,
                       self.body_color, self.accent, self.phase, self.scale)
-        label_y = self.feet_y - px(150 * self.scale) - px(6)
+        # 名字挂在脚下而不是头顶：追击者与玩家挨得很近，放头顶会被玩家挡住
         draw_text(screen, self.name, 15, (255, 130, 130),
-                  (int(sx), int(label_y)), anchor="midbottom")
+                  (int(sx), int(self.feet_y + px(5))), anchor="midtop")
 
 
 _shadow_cache2 = {}
@@ -606,7 +636,7 @@ class Obstacle:
         self.color = info["color"]
         self.h = px(info["h"])
         self.jumpable = info["jumpable"]
-        self.w = px(104)
+        self.w = px(OBSTACLE_W)
         self.x = LANE_CENTERS[lane]
         self.y = -float(self.h)
         self.evaluated = False
@@ -650,7 +680,7 @@ class PowerUp:
         self.name = info["name"]
         self.color = info["color"]
         self.text_color = info["text_color"]
-        self.size = px(52)
+        self.size = px(POWERUP_SIZE)
         self.x = LANE_CENTERS[lane]
         self.y = -float(self.size)
         self.evaluated = False
@@ -690,29 +720,40 @@ def _screen_fit_enabled():
 
 
 def _query_screen_size():
-    """读取设备真实屏幕像素尺寸。
+    """读取设备真实屏幕像素尺寸；探测失败返回 (0, 0)。
 
-    Android 上 pygame.SCALED 需要知道屏幕比例才能算出正确的逻辑画布高度。
-    取不到就回退到设计稿尺寸（此时游戏表现与电脑端一致）。
+    Android 上必须拿到真实屏幕分辨率，才能算出与屏幕同比例的逻辑画布
+    高度，进而做到零黑边。这里按可靠性从高到低依次尝试：
+
+    1. SDL_GetDesktopDisplayMode（get_desktop_sizes）：返回屏幕物理分辨率，
+       Android 上最可靠。
+    2. get_desktop_size：老版本 pygame 的同义接口。
+    3. 真开一个全屏窗口去量尺寸——会创建一个临时窗口，只在前面都失败时用。
     """
     if not pygame.display.get_init():
         try:
             pygame.display.init()
         except Exception:
             pass
+
     try:
-        info = pygame.display.Info()
-        if info.current_w > 0 and info.current_h > 0:
-            return info.current_w, info.current_h
+        getter = getattr(pygame.display, "get_desktop_sizes", None)
+        if getter is not None:
+            sizes = getter()
+            if sizes:
+                w, h = sizes[0][0], sizes[0][1]
+                if w > 0 and h > 0:
+                    return w, h
     except Exception:
         pass
+
     try:
         w, h = pygame.display.get_desktop_size()
         if w > 0 and h > 0:
             return w, h
     except Exception:
         pass
-    # 最后兜底：真的开一个全屏窗口去量它的尺寸
+
     try:
         probe = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
         w, h = probe.get_size()
@@ -720,7 +761,8 @@ def _query_screen_size():
             return w, h
     except Exception:
         pass
-    return DESIGN_W, DESIGN_H
+
+    return 0, 0
 
 
 # ==========================================================================
@@ -820,14 +862,18 @@ class Game:
         self._setup_canvas()
         pygame.display.set_caption("坤坤大逃亡 - 校园大逃亡")
 
+        # 加载界面背景要在动画开始前就绪，所以单独提前加载
+        self.loading_bg = self._load_loading_bg()
+        self.loading_dim = self._make_overlay((6, 10, 28, 120))
+
         # --- 分批加载资源，同时播放加载动画 ---
         self._load_with_animation()
 
-        # --- 菜单按钮 ---
-        cx = PLAY_W // 2
-        self.btn_start = Button("开始游戏", cx, HEIGHT // 2 + px(240))
-        self.btn_retry = Button("再玩一次", cx, HEIGHT // 2 + px(140))
-        self.btn_quit = Button("退出游戏", cx, HEIGHT // 2 + px(232), tone="ghost")
+        # --- 菜单按钮（纵坐标按画布高度比例定位，适配各种屏幕比例）---
+        cx = WIDTH // 2
+        self.btn_start = Button("开始游戏", cx, vh(0.53))
+        self.btn_retry = Button("再玩一次", cx, vh(0.58))
+        self.btn_quit = Button("退出游戏", cx, vh(0.70), tone="ghost")
 
         # 预渲染半透明遮罩：每帧新建整屏 Surface 会明显拖慢帧率
         self.overlay_start = self._make_overlay((6, 8, 22, 150))
@@ -841,28 +887,34 @@ class Game:
     # 屏幕与分辨率
     # ------------------------------------------------------------------
     def _setup_canvas(self):
-        """按屏幕分辨率确定逻辑画布尺寸并建立窗口。
+        """按屏幕比例确定逻辑画布高度并建立窗口。
 
-        画布宽度对齐屏幕宽度，配合 SCALED 就是 1:1 原生渲染，
-        画面不再被整体放大，清晰度比"小画布放大铺满"高一档。
+        画布宽高比刻意做成与屏幕完全一致，这样 SCALED 缩放后正好铺满，
+        不会留下黑边；宽度固定 720 是为了把软件渲染的像素量控制在可流畅
+        运行的范围内。
         """
-        screen_w, screen_h = DESIGN_W, DESIGN_H
+        canvas_h = DESIGN_H
+        matched = False
         if _screen_fit_enabled():
             screen_w, screen_h = _query_screen_size()
             # 部分安卓设备会把屏幕报告成横屏(如 2400x1080)，而本游戏锁定竖屏，
             # 统一按"短边为宽、长边为高"归一，避免算出错误比例。
             if screen_w > screen_h:
                 screen_w, screen_h = screen_h, screen_w
+            if screen_w > 0 and screen_h > 0:
+                canvas_h = int(round(DESIGN_W * screen_h / screen_w))
+                matched = True
+        _apply_render_scale(canvas_h)
 
-        scale = screen_w / DESIGN_W
-        canvas_h = screen_h
-        # 软件渲染下像素越多越吃力：超过上限就整体降采样，宁可略糊也要保住帧率
-        if scale * DESIGN_W * canvas_h > MAX_CANVAS_PIXELS:
-            k = math.sqrt(MAX_CANVAS_PIXELS / (scale * DESIGN_W * canvas_h))
-            scale *= k
-            canvas_h *= k
-        _apply_render_scale(scale, canvas_h)
+        # 缩放模式：画布比例与屏幕一致时用 overscan 直接铺满，零黑边；
+        # 尺寸探测失败时画布是设计稿比例、与屏幕对不上，此时改用 letterbox
+        # 留黑边，总好过把画面硬拉变形。必须在创建窗口之前设好。
+        os.environ["SDL_RENDER_LOGICAL_SIZE_MODE"] = (
+            "overscan" if matched else "letterbox")
 
+        # SCALED：把 720 宽的逻辑画布交给 SDL 缩放铺满屏幕（有 GPU 时走硬件，
+        # 比"直接在屏幕物理分辨率上软件渲染"快好几倍）。
+        # FULLSCREEN 隐藏状态栏。
         try:
             self.screen = pygame.display.set_mode((WIDTH, HEIGHT),
                                                   pygame.SCALED | pygame.FULLSCREEN)
@@ -879,40 +931,79 @@ class Game:
         s.fill(rgba)
         return s
 
+    def _load_loading_bg(self):
+        """加载启动界面背景图。
+
+        源图是 720x1280（9:16），而手机多在 20:9 上下，画布会更高一些。
+        不能按"铺满裁切"处理——那样标题会被裁掉；也不能直接填色块——
+        源图底部是亮色铁轨，填出来的色带和原图对不上，会留一道明显的分界。
+        这里改成把图片底部一小段纵向拉伸补齐：源图底部本来就是铁轨，
+        拉长后近似运动模糊，看上去像隧道继续向远处延伸。
+
+        背景图自带标题，所以加载界面不需要再画一遍标题。
+        图片缺失或损坏时回退为深色底，游戏照常启动。
+        """
+        try:
+            img = pygame.image.load(os.path.join(ASSET_DIR, "loading_bg.png")).convert()
+            src_w, src_h = img.get_size()
+            new_h = max(1, int(round(src_h * WIDTH / src_w)))
+            scaled = pygame.transform.smoothscale(img, (WIDTH, new_h))
+            surface = pygame.Surface((WIDTH, HEIGHT))
+            if new_h >= HEIGHT:
+                surface.blit(scaled, (0, 0))          # 画布更矮：保留顶部标题
+            else:
+                tail_h = min(px(72), new_h)
+                tail = scaled.subsurface(
+                    pygame.Rect(0, new_h - tail_h, WIDTH, tail_h)).copy()
+                surface.blit(scaled, (0, 0))
+                surface.blit(
+                    pygame.transform.smoothscale(
+                        tail, (WIDTH, HEIGHT - new_h + tail_h)),
+                    (0, new_h - tail_h))
+            self.loading_bg_ok = True
+            return surface
+        except Exception:
+            self.loading_bg_ok = False
+            fallback = pygame.Surface((WIDTH, HEIGHT))
+            fallback.fill((10, 13, 26))
+            return fallback
+
     # ------------------------------------------------------------------
     # 加载动画
     # ------------------------------------------------------------------
     def _draw_loading(self, progress, label):
-        """绘制加载界面：标题 + 进度条 + 当前步骤 + 跑动小人。"""
+        """绘制加载界面：背景图 + 进度条 + 当前步骤。"""
         pygame.event.pump()                       # 保持窗口响应，避免被系统判定卡死
         t = pygame.time.get_ticks() / 1000.0
-        self.screen.fill((8, 10, 24))
-        cx, cy = WIDTH // 2, HEIGHT // 2
+        cx = WIDTH // 2
+        progress = max(0.0, min(1.0, progress))
 
-        draw_glow_text(self.screen, "坤坤大逃亡", 52, COLOR_GOLD, (255, 120, 40),
-                       (cx, cy - px(150)), anchor="center")
-        draw_text(self.screen, "校园大逃亡", 24, COLOR_TEXT_DIM,
-                  (cx, cy - px(88)), anchor="center")
+        self.screen.blit(self.loading_bg, (0, 0))
+        self.screen.blit(self.loading_dim, (0, 0))   # 压暗背景，保证文字可读
 
-        # 进度条
-        bar_h = px(14)
-        bar = pygame.Rect(0, 0, px(360), bar_h)
-        bar.center = (cx, cy + px(30))
-        pygame.draw.rect(self.screen, (30, 34, 58), bar, border_radius=bar_h // 2)
+        if not self.loading_bg_ok:
+            draw_glow_text(self.screen, "坤坤大逃亡", 52, COLOR_GOLD, (255, 120, 40),
+                           (cx, vh(0.34)), anchor="center")
+
+        # 进度条固定在画面下方，避开背景图里的标题与人物
+        bar_h = px(16)
+        bar_w = int(WIDTH * 0.78)
+        bar = pygame.Rect(cx - bar_w // 2, vh(0.80), bar_w, bar_h)
+        pygame.draw.rect(self.screen, (26, 30, 54), bar, border_radius=bar_h // 2)
         fill = pygame.Rect(bar.x, bar.y, int(bar.w * progress), bar.h)
         if fill.w > 0:
             pygame.draw.rect(self.screen, COLOR_GOLD, fill, border_radius=bar_h // 2)
-        pygame.draw.rect(self.screen, (120, 140, 210), bar, max(1, px(2)),
+        pygame.draw.rect(self.screen, (150, 170, 230), bar, max(1, px(2)),
                          border_radius=bar_h // 2)
 
-        draw_text(self.screen, label, 18, COLOR_TEXT, (cx, cy + px(78)), anchor="center")
-        draw_text(self.screen, f"{int(progress * 100)}%", 16, COLOR_TEXT_DIM,
-                  (cx, cy + px(110)), anchor="center")
+        draw_text(self.screen, label, 22, COLOR_TEXT, (cx, bar.y - px(40)),
+                  anchor="center", bold=True)
+        draw_text(self.screen, f"{int(progress * 100)}%", 18, COLOR_TEXT_DIM,
+                  (cx, bar.bottom + px(26)), anchor="center")
 
         # 跑动的小人：让"正在加载"有动感，而不是一张静止的图
-        # 放在画面下方，与进度条拉开距离，避免和文字叠在一起
-        draw_humanoid(self.screen, None, cx, cy + px(430),
-                      (46, 116, 226), (255, 200, 70), t * 13, 0.85)
+        draw_humanoid(self.screen, None, WIDTH - px(100), vh(0.70),
+                      (46, 116, 226), (255, 200, 70), t * 13, 0.75)
 
         pygame.display.flip()
         self.clock.tick(30)
@@ -956,7 +1047,7 @@ class Game:
         self.best_score = 0.0
         # 预渲染静态内容，之后每帧只做 blit
         self.bg_surface = self._build_background()
-        self.side_panel_static = self._build_side_panel_static()
+        self.hud_backdrop = self._build_hud_backdrop()
         self.road_marks, self.road_gap = self._build_road_marks()
 
     def _make_bg_decor(self):
@@ -1112,8 +1203,6 @@ class Game:
         """把一次触摸（轻点/滑动）转换成游戏动作。"""
         if self.state != "playing":
             return
-        if x0 >= PLAY_W:      # 忽略侧边栏区域的触摸
-            return
 
         SWIPE = px(60)        # 判定为滑动的最小像素
         if abs(dx) < SWIPE and abs(dy) < SWIPE:
@@ -1250,8 +1339,10 @@ class Game:
         for i in range(1, LANE_COUNT):
             x = int(i * LANE_W)
             pygame.draw.line(bg, (90, 100, 140), (x, 0), (x, HEIGHT), max(1, px(3)))
+        # 判定线（跑道地面）。追击者就站在它附近，画太重会显得像一条横杠压在身上，
+        # 这里用偏暗的颜色、细一点，保留"地面"层次感又不抢戏。
         py8 = PLAYER_Y + px(8)
-        pygame.draw.line(bg, (140, 150, 190), (0, py8), (PLAY_W, py8), max(1, px(4)))
+        pygame.draw.line(bg, (100, 110, 148), (0, py8), (PLAY_W, py8), max(1, px(3)))
         return bg
 
     def draw_background(self):
@@ -1263,84 +1354,87 @@ class Game:
             self.screen.blit(d["surf"], (int(d["x"] - d["size"]), dy))
 
     def _build_road_marks(self):
-        """预渲染一格路面标线，绘制时垂直平铺即可，省掉每帧几十次 draw.rect。"""
+        """预渲染一条路面标线，绘制时按固定间隔竖直平铺。
+
+        只做标线本体那么高（26px）而非整段间隔：标线每帧要平铺 20 多次，
+        如果把间隔的空白也做进 Surface，每次 blit 都得处理大量透明像素。
+        """
         gap = px(78)
-        surf = pygame.Surface((PLAY_W, gap), pygame.SRCALPHA)
+        mark_h = px(26)
+        surf = pygame.Surface((PLAY_W, mark_h), pygame.SRCALPHA)
         for lane in range(LANE_COUNT):
             x = int(LANE_CENTERS[lane])
             pygame.draw.rect(surf, (170, 180, 210),
-                             (x - px(4), 0, px(8), px(26)), border_radius=px(4))
+                             (x - px(4), 0, px(8), mark_h), border_radius=px(4))
         return surf, gap
 
     def draw_road_marks(self):
         gap = self.road_gap
-        offset = int(self.bg_scroll % gap)
-        y = -gap + offset
+        y = int(self.bg_scroll % gap) - gap
         while y < HEIGHT:
             self.screen.blit(self.road_marks, (0, y))
             y += gap
 
+    def _build_hud_backdrop(self):
+        """预渲染顶部渐变压暗条。
+
+        右侧边栏移除后所有状态信息都搬到顶部，直接压在跑道上会看不清，
+        加一层自上而下渐隐的暗色条来保证可读性。
+        """
+        h = px(136)
+        surf = pygame.Surface((WIDTH, h), pygame.SRCALPHA)
+        for y in range(h):
+            a = int(155 * (1 - y / h) ** 1.5)
+            if a > 0:
+                surf.fill((6, 10, 26, a), (0, y, WIDTH, 1))
+        return surf
+
     def draw_hud(self):
+        """顶部状态条：得分 / 最高分 / 时间 + 凝视倒计时（取代原来的右侧边栏）。"""
         # 菜单界面不显示计分板，避免"得分 0 / 时间 0.0s"压在标题上
         if self.state != "playing":
             return
-        x = px(18)
-        draw_text(self.screen, f"得分 {int(self.score)}", 26, COLOR_GOLD, (x, px(16)), bold=True)
-        draw_text(self.screen, f"时间 {self.elapsed:.1f}s", 19, COLOR_TEXT, (x, px(52)))
-        draw_text(self.screen, f"最高分 {int(self.best_score)}", 17, COLOR_TEXT_DIM, (x, px(80)))
+        self.screen.blit(self.hud_backdrop, (0, 0))
 
-    def _build_side_panel_static(self):
-        """预渲染侧边栏静态部分（面板 + 键位说明 + 实时状态标题）。"""
-        surf = pygame.Surface((SIDE_W, HEIGHT), pygame.SRCALPHA)
-        pygame.draw.rect(surf, (16, 20, 38, 200), surf.get_rect())
-        pygame.draw.rect(surf, (110, 150, 255, 90), surf.get_rect(), 2)
+        left = px(18)
+        right = WIDTH - px(18)
 
-        cx = SIDE_W // 2
-        draw_glow_text(surf, "键位说明", 24, COLOR_GOLD, (80, 90, 140),
-                       (cx, px(30)), anchor="midtop")
-        hints = [
-            ("← / →  或  A / D", "切换跑道"),
-            ("↑ / W / 空格", "跳跃"),
-            ("ESC", "退出游戏"),
-            ("R（结束后）", "重新开始"),
-        ]
-        y = px(76)
-        for keys, action in hints:
-            draw_text(surf, keys, 16, (150, 205, 255), (px(16), y), bold=True)
-            draw_text(surf, action, 14, COLOR_TEXT_DIM, (px(16), y + px(21)))
-            y += px(48)
+        draw_text(self.screen, "得分", 15, COLOR_TEXT_DIM, (left, px(10)))
+        draw_text(self.screen, f"{int(self.score)}", 38, COLOR_GOLD,
+                  (left, px(26)), bold=True)
 
-        pygame.draw.line(surf, (70, 80, 110), (px(12), y), (SIDE_W - px(12), y), max(1, px(2)))
-        y += px(14)
-        draw_glow_text(surf, "实时状态", 20, COLOR_GOLD, (80, 90, 140),
-                       (cx, y), anchor="midtop")
-        return surf
+        draw_text(self.screen, f"最高 {int(self.best_score)}", 16, COLOR_TEXT_DIM,
+                  (right, px(12)), anchor="topright")
+        draw_text(self.screen, f"{self.elapsed:.1f}s", 20, COLOR_TEXT,
+                  (right, px(36)), anchor="topright")
 
-    def draw_side_panel(self):
-        self.screen.blit(self.side_panel_static, (PLAY_W, 0))
-
-        # 动态状态（与静态区底部对齐后向下绘制）
-        tx = PLAY_W + px(16)
-        y = px(314)
-        draw_text(self.screen, f"得分  {int(self.score)}", 16, COLOR_TEXT, (tx, y)); y += px(25)
-        draw_text(self.screen, f"时间  {self.elapsed:.1f}s", 16, COLOR_TEXT, (tx, y)); y += px(25)
-        draw_text(self.screen, f"速度  {int(self.speed)}", 16, COLOR_TEXT, (tx, y)); y += px(30)
-
-        # 凝视倒计时
-        # 字号 15 实际渲染高度约 20，步进必须留够，否则进度条会压住文字
-        draw_text(self.screen, "凝视倒计时", 15, COLOR_WARN, (tx, y), bold=True); y += px(26)
-        bar = pygame.Rect(tx, y, SIDE_W - px(32), px(13))
-        pygame.draw.rect(self.screen, (50, 50, 60), bar, border_radius=px(7))
+        # 凝视倒计时：全宽细条，一眼就能看到进度
+        bar = pygame.Rect(left, px(74), WIDTH - left * 2, px(12))
+        pygame.draw.rect(self.screen, (46, 48, 66), bar, border_radius=px(6))
         ratio = max(0.0, min(1.0, self.time_since_lane_change / GAZE_THRESHOLD))
-        fill = pygame.Rect(bar.x, bar.y, int(bar.w * ratio), bar.h)
-        pygame.draw.rect(self.screen, (255, 160, 40) if self.gaze else COLOR_WARN, fill, border_radius=px(7))
-        pygame.draw.rect(self.screen, (190, 190, 200), bar, max(1, px(2)), border_radius=px(7))
-        y += px(30)
+        if ratio > 0.0:
+            fill = pygame.Rect(bar.x, bar.y, max(px(2), int(bar.w * ratio)), bar.h)
+            pygame.draw.rect(self.screen,
+                             (255, 160, 40) if self.gaze else COLOR_WARN,
+                             fill, border_radius=px(6))
+        pygame.draw.rect(self.screen, (188, 192, 208), bar, max(1, px(2)),
+                         border_radius=px(6))
 
+        if self.gaze:
+            draw_text(self.screen, "班主任的凝视中！", 18, COLOR_WARN,
+                      (left, px(94)), bold=True)
+        else:
+            draw_text(self.screen, "凝视倒计时", 14, COLOR_TEXT_DIM, (left, px(94)))
+
+        # 增益状态（无敌 / 加速）
+        y = px(118)
         if self.player.invincible:
-            draw_text(self.screen, f"无敌 {self.player.invincible_timer:.1f}s", 16, (255, 220, 120), (tx, y), bold=True); y += px(24)
+            draw_text(self.screen, f"无敌 {self.player.invincible_timer:.1f}s",
+                      17, (255, 220, 120), (left, y), bold=True)
+            y += px(24)
         if self.player.speed_boost:
-            draw_text(self.screen, f"加速 {self.player.coffee_timer:.1f}s", 16, (120, 220, 255), (tx, y), bold=True); y += px(24)
+            draw_text(self.screen, f"加速 {self.player.coffee_timer:.1f}s",
+                      17, (120, 220, 255), (left, y), bold=True)
 
     def draw_gaze_warning(self):
         if int(pygame.time.get_ticks() // 250) % 2 == 0:
@@ -1348,21 +1442,64 @@ class Game:
                            (PLAY_W // 2, HEIGHT // 2 - px(70)), anchor="center")
         self.screen.blit(self.overlay_gaze, (0, 0))
 
+    def _draw_start_help(self):
+        """开始前的「操作方式 + 游戏规则」提醒面板。
+
+        这些说明原本固定在右侧边栏里，既挤占跑道又在手机上小得看不清；
+        现在只在开始界面统一提醒一次，进入游戏后画面留给跑道。
+        """
+        panel_top = vh(0.64)
+        panel_h = max(px(230), vh(0.26))
+        panel = pygame.Rect(px(22), panel_top, WIDTH - px(44), panel_h)
+        glass_panel(self.screen, panel, radius=px(18))
+
+        half = panel.w // 2
+        col_l = panel.x + px(26)          # 左栏正文起点
+        col_r = panel.x + half + px(10)   # 右栏正文起点
+
+        head_y = panel.y + px(24)
+        draw_text(self.screen, "操作方式", 20, COLOR_GOLD,
+                  (col_l + (half - px(26)) // 2, head_y), anchor="midtop", bold=True)
+        draw_text(self.screen, "游戏规则", 20, COLOR_GOLD,
+                  (col_r + (panel.w - half - px(10)) // 2, head_y),
+                  anchor="midtop", bold=True)
+
+        rows_top = panel.y + max(px(58), vh(0.046))
+        gap = max(px(34), vh(0.047))
+
+        keys = [
+            ("← → / A D", "切换跑道"),
+            ("↑ / W / 空格", "跳跃"),
+            ("左右滑动", "切换跑道"),
+            ("上滑 / 点中间", "跳跃"),
+        ]
+        rules = [
+            "躲开课桌，跳过黑板擦与试卷",
+            "换道可以打断班主任的凝视",
+            "凝视时班主任与校长加速逼近",
+            "咖啡加速得分翻倍，辣条无敌",
+        ]
+        for i, (key, action) in enumerate(keys):
+            y = rows_top + i * gap
+            draw_text(self.screen, key, 16, (150, 205, 255), (col_l, y), bold=True)
+            draw_text(self.screen, action, 16, COLOR_TEXT_DIM, (col_l + px(152), y))
+        for i, text in enumerate(rules):
+            draw_text(self.screen, text, 16, COLOR_TEXT, (col_r, rows_top + i * gap))
+
     def draw_start_screen(self):
         t = pygame.time.get_ticks() / 1000.0
         self.screen.blit(self.overlay_start, (0, 0))
-        cx, cy = PLAY_W // 2, HEIGHT // 2
+        cx = WIDTH // 2
 
         # 标题：上下弹跳 + 辉光
         bounce = int(math.sin(t * 2.0) * px(12))
         draw_glow_text(self.screen, "坤坤大逃亡", 66, COLOR_GOLD, (255, 120, 40),
-                       (cx, cy - px(200) + bounce), anchor="center")
+                       (cx, vh(0.115) + bounce), anchor="center")
         draw_text(self.screen, "校园大逃亡", 30, COLOR_TEXT,
-                  (cx, cy - px(140) + bounce), anchor="center")
+                  (cx, vh(0.175) + bounce), anchor="center")
 
         # 三个人物在开始界面预览跑动（人形 + 动效）
-        # 脚底下移到 cy+80，给副标题留出空间，避免人物头顶压住文字
-        preview_y = cy + px(80)
+        preview_y = vh(0.38)
         ph = t * 13
         draw_humanoid(self.screen, self.chasers[0].face, cx - px(150), preview_y,
                       self.chasers[0].body_color, self.chasers[0].accent, ph, 0.9)
@@ -1370,39 +1507,36 @@ class Game:
                       self.player.body_color, self.player.accent, ph + 0.5, 1.0)
         draw_humanoid(self.screen, self.chasers[1].face, cx + px(150), preview_y,
                       self.chasers[1].body_color, self.chasers[1].accent, ph + 1.0, 0.9)
-        draw_text(self.screen, "坤坤", 18, COLOR_GOLD, (cx, preview_y + px(70)),
+        draw_text(self.screen, "坤坤", 18, COLOR_GOLD, (cx, preview_y + px(18)),
                   anchor="midtop", bold=True)
 
         # 开始按钮（呼吸高亮 + 鼠标悬停）
         pulse = (math.sin(t * 3.0) + 1) / 2.0
         self.btn_start.draw(self.screen, pulse, self._hovering(self.btn_start))
 
-        draw_text(self.screen, "空格 / 点击按钮 开始", 20, COLOR_TEXT_DIM,
-                  (cx, cy + px(310)), anchor="center")
-        draw_text(self.screen, "切换跑道可躲避班主任的凝视", 18, COLOR_TEXT_DIM,
-                  (cx, cy + px(345)), anchor="center")
-        draw_text(self.screen, "手机：左右滑换道，上滑/点按跳跃", 18, COLOR_TEXT_DIM,
-                  (cx, cy + px(373)), anchor="center")
+        # 操作方式与游戏规则提醒
+        self._draw_start_help()
 
     def draw_game_over(self):
         t = pygame.time.get_ticks() / 1000.0
         self.screen.blit(self.overlay_over, (0, 0))
-        cx, cy = PLAY_W // 2, HEIGHT // 2
+        cx = WIDTH // 2
 
         draw_glow_text(self.screen, "游戏结束", 56, (255, 230, 230), COLOR_WARN,
-                       (cx, cy - px(170)), anchor="center")
+                       (cx, vh(0.20)), anchor="center")
 
-        panel = pygame.Rect(cx - px(150), cy - px(120), px(300), px(152))
+        panel = pygame.Rect(0, 0, min(px(470), WIDTH - px(60)), px(184))
+        panel.center = (cx, vh(0.34))
         glass_panel(self.screen, panel, radius=px(20))
-        draw_text(self.screen, f"存活时间  {self.elapsed:.1f} 秒", 24, COLOR_TEXT,
-                  (cx, cy - px(92)), anchor="center")
-        draw_text(self.screen, f"最终得分  {int(self.score)}", 24, COLOR_TEXT,
-                  (cx, cy - px(56)), anchor="center")
+        draw_text(self.screen, f"存活时间  {self.elapsed:.1f} 秒", 23, COLOR_TEXT,
+                  (cx, panel.y + px(42)), anchor="center")
+        draw_text(self.screen, f"最终得分  {int(self.score)}", 28, COLOR_GOLD,
+                  (cx, panel.y + px(92)), anchor="center", bold=True)
         draw_text(self.screen, f"历史最高  {int(self.best_score)}", 20, COLOR_TEXT_DIM,
-                  (cx, cy - px(22)), anchor="center")
+                  (cx, panel.y + px(138)), anchor="center")
 
         draw_glow_text(self.screen, "坤坤没能成功逃脱", 32, COLOR_GOLD, (180, 120, 40),
-                       (cx, cy + px(60)), anchor="center")
+                       (cx, vh(0.48)), anchor="center")
 
         # 两个按钮：主行动呼吸高亮，次行动保持静态
         pulse = (math.sin(t * 3.0) + 1) / 2.0
@@ -1425,7 +1559,6 @@ class Game:
             p.draw(self.screen)
 
         self.draw_hud()
-        self.draw_side_panel()
         if self.gaze:
             self.draw_gaze_warning()
 

@@ -16,6 +16,10 @@ source.include_exts = py,jpg,png,mp3,ogg,wav,ttf,otf
 # (list) 排除目录（dsh-deep-whale 是另一个无关工程，不要打进去）
 source.exclude_dirs = .git,.github,__pycache__,.venv,.deps,.pip-tmp,bin,.buildozer,.buildozer_global,dsh-deep-whale,.workbuddy,tools
 
+# (list) 排除文件：这两张是有水印的素材源图，只用于本地生成 icon.png /
+# loading_bg.png，不需要打进 APK（省约 2.5 MB）
+source.exclude_patterns = kkphoto.png,beijing.png
+
 # (list) 依赖
 # 关键：p4a 的 pygame 配方版本是 2.1.0，只支持到 Python 3.10，
 # 而 p4a 默认已经是 Python 3.14，不锁版本必定编译失败。
@@ -48,9 +52,11 @@ version = 1.0
 android.permissions =
 
 # 图标与启动图
+# icon.png       由 tools/prep_assets.py 从 kkphoto.png 生成（512x512）
+# presplash 用同一张加载背景：Android 启动闪屏 → 游戏内加载动画 可以无缝衔接
 icon.filename = %(source.dir)s/icon.png
-presplash.filename = %(source.dir)s/icon.png
-presplash.color = #141C3C
+presplash.filename = %(source.dir)s/loading_bg.png
+presplash.color = #0A0D1A
 
 [buildozer]
 

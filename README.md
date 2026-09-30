@@ -42,23 +42,31 @@ kunkun_da_tao_wang.py            ← 游戏主程序（改代码改这里）
 KK大逃亡（点我运行）.py            ← 电脑端双击启动器
 main.py                          ← Android 打包入口
 buildozer.spec                   ← APK 打包配置
-icon.png                         ← 应用图标（用 tools/gen_icon.py 生成）
+icon.png                         ← 应用图标（由 kkphoto.png 生成）
+loading_bg.png                   ← 启动加载界面背景（由 beijing.png 生成）
 tools/smoke_test.py              ← 无头冒烟测试
-tools/test_screen_fit.py         ← 各机型铺满 / 清晰度 / 难度一致性
+tools/test_screen_fit.py         ← 各机型铺满 / 像素量 / 难度一致性
 tools/test_perf.py               ← 渲染性能基准
+tools/profile_frame.py           ← 逐帧耗时分解，定位性能瓶颈
 tools/preview_ui.py              ← 生成各界面截图（输出到 tools/preview/）
-tools/gen_icon.py                ← 重新生成图标
+tools/prep_assets.py             ← 抹水印并生成图标 / 加载背景
 ```
 
 ## 界面与手感
 
-- **清晰**：逻辑画布按屏幕真实分辨率设定，配合 `pygame.SCALED` 是 1:1 原生渲染，
-  主流机型（1080×2400 等）不做任何放大，也不留黑边。
-- **流畅**：背景、路面、侧边栏、遮罩、文字、阴影、光晕全部预渲染缓存，
-  每帧只做 blit。实测 ≈200 FPS（60 FPS 的预算是 16.7 ms/帧）。
-- **加载动画**：启动时分批加载资源，带进度条、当前步骤和跑动小人。
+- **流畅优先**：pygame 是 CPU 软件渲染，每帧写入的像素量直接决定帧率。
+  画布固定 720 宽、按屏幕比例加高（主流机型约 1.15M 像素，是屏幕物理像素的
+  约 45%），再由 `pygame.SCALED` 交给 GPU 缩放铺满屏幕。
+- **铺满全屏**：画布宽高比刻意做得与屏幕完全一致，且把 SDL 的缩放模式设为
+  overscan，缩放后严丝合缝、不留黑边。
+- **预渲染缓存**：背景、路面标线、遮罩、文字、阴影、光晕全部缓存，
+  每帧只做 blit；文字缓存用 LRU 淘汰，避免周期性重建造成的掉帧尖峰。
+- **加载动画**：启动时分批加载资源，以 `loading_bg.png` 为背景，
+  带进度条、当前步骤和跑动小人。
 - **按钮化菜单**：开始 / 重开 / 退出都是可点击按钮，带呼吸光晕、
   悬停高亮和按下反馈，触摸与鼠标通用。
+- **操作与规则提醒**：开始游戏前在开始界面统一展示键位与玩法说明，
+  进入游戏后画面全部留给跑道（原来的右侧说明栏已移除）。
 
 ## 操作方式
 
@@ -94,10 +102,17 @@ tools/gen_icon.py                ← 重新生成图标
 改完代码先跑一遍，能提前发现资源缺失或渲染错误：
 
 ```
-python tools/smoke_test.py        # 资源 + 逻辑 + 三界面渲染
-python tools/test_screen_fit.py   # 屏幕适配与清晰度
+python tools/smoke_test.py        # 资源 + 逻辑 + 四界面渲染 + 按钮
+python tools/test_screen_fit.py   # 各机型比例匹配 / 画布像素量 / 难度一致性
 python tools/test_perf.py         # 帧率基准
+python tools/profile_frame.py     # 逐帧耗时分解（怀疑掉帧时先跑这个）
 python tools/preview_ui.py        # 出界面截图，肉眼验收布局
 ```
 
 前三个输出 `SMOKE OK` / `SCREEN FIT OK` / `PERF OK` 即正常。
+
+重新生成图标与加载背景（源图是 `kkphoto.png` / `beijing.png`）：
+
+```
+python tools/prep_assets.py
+```
