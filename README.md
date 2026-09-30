@@ -44,17 +44,33 @@ main.py                          ← Android 打包入口
 buildozer.spec                   ← APK 打包配置
 icon.png                         ← 应用图标（用 tools/gen_icon.py 生成）
 tools/smoke_test.py              ← 无头冒烟测试
+tools/test_screen_fit.py         ← 各机型铺满 / 清晰度 / 难度一致性
+tools/test_perf.py               ← 渲染性能基准
+tools/preview_ui.py              ← 生成各界面截图（输出到 tools/preview/）
 tools/gen_icon.py                ← 重新生成图标
 ```
 
+## 界面与手感
+
+- **清晰**：逻辑画布按屏幕真实分辨率设定，配合 `pygame.SCALED` 是 1:1 原生渲染，
+  主流机型（1080×2400 等）不做任何放大，也不留黑边。
+- **流畅**：背景、路面、侧边栏、遮罩、文字、阴影、光晕全部预渲染缓存，
+  每帧只做 blit。实测 ≈200 FPS（60 FPS 的预算是 16.7 ms/帧）。
+- **加载动画**：启动时分批加载资源，带进度条、当前步骤和跑动小人。
+- **按钮化菜单**：开始 / 重开 / 退出都是可点击按钮，带呼吸光晕、
+  悬停高亮和按下反馈，触摸与鼠标通用。
+
 ## 操作方式
 
-| 按键 | 作用 |
+| 操作 | 作用 |
 | --- | --- |
 | 左 / 右方向键 或 A / D | 在 3 条跑道间切换（切换会重置凝视倒计时） |
 | 上方向键 / W / 空格 | 跳跃（可跳过矮障碍：黑板擦、试卷） |
 | ESC | 退出游戏 |
 | R（游戏结束后） | 重新开始 |
+| 点「开始游戏」/「再玩一次」按钮 | 开始 / 重新开始 |
+
+手机上：**左右滑**换道，**上滑或点中间**跳跃，**点按钮**开始 / 重开 / 退出。
 
 ## 玩法要点
 
@@ -75,10 +91,13 @@ tools/gen_icon.py                ← 重新生成图标
 
 ## 本地自检
 
-改完代码先跑一遍冒烟测试，能提前发现资源缺失或渲染错误：
+改完代码先跑一遍，能提前发现资源缺失或渲染错误：
 
 ```
-python tools/smoke_test.py
+python tools/smoke_test.py        # 资源 + 逻辑 + 三界面渲染
+python tools/test_screen_fit.py   # 屏幕适配与清晰度
+python tools/test_perf.py         # 帧率基准
+python tools/preview_ui.py        # 出界面截图，肉眼验收布局
 ```
 
-输出 `SMOKE OK` 即正常。
+前三个输出 `SMOKE OK` / `SCREEN FIT OK` / `PERF OK` 即正常。

@@ -24,3 +24,10 @@ Thumbs.db
 # ---- 本地临时文件 ----
 _probe.txt
 _gitver.py
+_st.txt
+_cm.txt
+_lsr.txt
+
+# ---- 测试产物 ----
+tools/preview/
+.pytest_cache/

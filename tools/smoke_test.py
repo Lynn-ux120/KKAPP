@@ -54,4 +54,37 @@ font = g.get_font(40, True)
 surf = font.render("坤坤大逃亡", True, (255, 255, 255))
 print("cjk render width =", surf.get_width(), "height =", surf.get_height())
 
+# ---- 菜单按钮自检 ----
+canvas = game.screen.get_rect()
+for btn in (game.btn_start, game.btn_retry, game.btn_quit):
+    inside = canvas.contains(btn.rect)
+    print(f"按钮「{btn.label}」 rect={tuple(btn.rect)} 在画布内={inside}")
+    assert inside, f"按钮「{btn.label}」超出画布"
+
+# 开始界面：点「开始游戏」应进入游戏
+game.state = "start"
+game._handle_menu_click(game.btn_start.rect.center)
+print("点击开始按钮 -> state =", game.state)
+assert game.state == "playing"
+
+# 结束界面：点「再玩一次」应重开
+game.trigger_game_over()
+game._handle_menu_click(game.btn_retry.rect.center)
+print("点击再玩一次 -> state =", game.state)
+assert game.state == "playing"
+
+# 结束界面：点「退出游戏」应结束主循环
+game.trigger_game_over()
+game._handle_menu_click(game.btn_quit.rect.center)
+print("点击退出游戏 -> running =", game.running)
+assert game.running is False
+
+# 按钮按下态反馈
+game.running = True
+game.state = "start"
+game._set_buttons_pressed(game.btn_start.rect.center, True)
+print("按下态 =", game.btn_start.pressed)
+assert game.btn_start.pressed is True
+game._set_buttons_pressed(game.btn_start.rect.center, False)
+
 print("SMOKE OK")
