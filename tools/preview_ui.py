@@ -56,6 +56,15 @@ game.player.coffee_timer = 2.0
 game.draw()
 save("playing.png")
 
+# 凝视态：验证"红版背景"的观感（这一版把整屏红罩换成了背景换图）
+game.time_since_lane_change = 5.4
+game.update(1 / 60)
+for _ in range(20):
+    game.update(1 / 60)
+game.draw()
+save("gaze.png")
+
+game.gaze = False
 game.trigger_game_over()
 game.draw()
 save("over.png")

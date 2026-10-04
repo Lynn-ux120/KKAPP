@@ -30,4 +30,5 @@ _lsr.txt
 
 # ---- 测试产物 ----
 tools/preview/
+tools/_*.txt
 .pytest_cache/
