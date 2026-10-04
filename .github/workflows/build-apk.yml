@@ -10,7 +10,7 @@ on:
     paths:
       - "**.py"
       - "buildozer.spec"
-      - "icon.png"
+      - "**.png"          # 含 icon.png / loading_bg.png 等所有素材
       - "**.jpg"
       - "**.ogg"
       - "**.otf"
